@@ -1,13 +1,13 @@
+-- 微信支付
 local sign      = require "bw.auth.sign"
 local lua2xml   = require "bw.xml.lua2xml"
 local xml2lua   = require "bw.xml.xml2lua"
-local http      = require "bw.web.http_helper"
 local util      = require "bw.util"
+local http      = require "bw.http"
 local log       = require "bw.log"
-local conf      = require "conf"
-local def       = require "def"
+local uuid      = require "bw.uuid"
 local errcode   = require "def.errcode"
-local trace     = log.trace("wxpay")
+local def       = require "def.def"
 
 local M = {}
 function M.create_order(param)
@@ -19,19 +19,20 @@ function M.create_order(param)
     local item_desc     = assert(param.item_desc)
     local pay_method    = assert(param.pay_method)
     local pay_price     = assert(param.pay_price)
+    local url           = assert(param.url)
     assert(param.pay_channel)
     assert(param.item_sn)
 
     local args = {
-        appid           = appid,
-        mch_id          = mch_id,
-        nonce_str       = math.random(10000)..uid,
-        trade_type      = pay_method == "wxpay" and "APP" or "NATIVE",
-        body            = item_desc,
-        out_trade_no    = order_no..'-'..os.time(),
-        total_fee       = pay_price*100//1 >> 0,
-        spbill_create_ip= '127.0.0.1',
-        notify_url      = string.format("%s:%s/api/payment/wxpay_notify", conf.pay.host, conf.pay.port),
+        appid            = appid,
+        mch_id           = mch_id,
+        nonce_str        = math.random(10000)..uid,
+        trade_type       = pay_method == "wxpay" and "APP" or "NATIVE",
+        body             = item_desc,
+        out_trade_no     = order_no,
+        total_fee        = pay_price*100//1 >> 0,
+        spbill_create_ip = '127.0.0.1',
+        notify_url       = url,
     }
     args.sign = sign.md5_args(args, key)
     local xml = lua2xml.encode("xml", args, true)
@@ -39,7 +40,7 @@ function M.create_order(param)
     local data = xml2lua.decode(resp_str).xml
 
     if data.return_code ~= "SUCCESS" and data.return_msg ~= "OK" then
-        log.error(string.format("wxpay create_order error, param:%s, resp:%s", util.dump(param), resp_str))
+        log.errorf("wxpay create_order error, param:%s, resp:%s", util.dump(param), resp_str)
         return errcode.WXORDER_FAIL
     end
 
@@ -91,11 +92,38 @@ function M.notify(order, key, param)
     end
 
     if param.result_code ~= "SUCCESS" or param.return_code ~= "SUCCESS" then
-        trace("wxpay fail %s", util.dump(param))
+        log.errorf("wxpay fail %s", util.dump(param))
     else
         order.pay_time = os.time()
         order.tid = param.transaction_id
     end
     return WX_OK
 end
+
+function M.query(param)
+    local appid          = assert(param.appid)
+    local mch_id         = assert(param.mch_id)
+    local key            = assert(param.key)
+    local transaction_id = param.transaction_id
+    local out_trade_no   = param.out_trade_no
+    assert(transaction_id or out_trade_no)
+
+    local args = {
+        appid = appid,
+        mch_id = mch_id,
+        transaction_id = transaction_id,
+        nonce_str = string.gsub(uuid(), '-', ''),
+    }
+    args.sign = sign.md5_args(args, key)
+    log.debug(args)
+
+    local xml = lua2xml.encode("xml", args, true)
+    local _, resp_str = http.post("https://api.mch.weixin.qq.com/pay/orderquery", xml)
+    local resp = xml2lua.decode(resp_str).xml
+
+    if resp.result_code == "SUCCESS" then
+        return resp
+    end
+end
+
 return M

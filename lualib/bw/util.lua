@@ -1,61 +1,20 @@
 local skynet = require "skynet.manager"
 
 local util = {}
--- 处理skynet.send的消息
-util.NORET = "NORET"
-function util.ret(noret, ...)
-    if noret ~= "NORET" then
-        skynet.ret(skynet.pack(noret, ...))
-    end
-end
-
--- 有需要的节点在启动时调用
-function util.init_proto_env(path)
-    local sname = require "bw.sname"
-    skynet.call(sname.PROTO, "lua", "register_file", path)
-end
-
--- 获取节点内的protobuf
-function util.get_protobuf()
-    local sname = require "bw.sname"
-    local protobuf_env = skynet.call(sname.PROTO, "lua", "get_protobuf_env")
-    assert(type(protobuf_env) == "userdata")
-    assert(not package.loaded["protobuf"])
-    debug.getregistry().PROTOBUF_ENV = protobuf_env
-    return require "bw.protobuf"
-end
-
-local function __TRACEBACK__(errmsg)
-    local track_text = debug.traceback(tostring(errmsg), 2)
-    skynet.error("---------------------------------------- TRACKBACK ----------------------------------------")
-    skynet.error(track_text, "LUA ERROR")
-    skynet.error("---------------------------------------- TRACKBACK ----------------------------------------")
-    --local exception_text = "LUA EXCEPTION\n" .. track_text
-    return false
-end
-
--- 尝试调一个function 这个function可以带可变参数, 如果被调用的函数有异常 返回false，
--- 退出此方法继续执行其他代码并打印出异常信息
-function util.try(func, ...)
-    return xpcall(func, __TRACEBACK__, ...)
-end
 
 function util.shell(cmd, ...)
     cmd = string.format(cmd, ...)
-    skynet.error(cmd)
     return io.popen(cmd):read("*all")
 end
 
 function util.run_cluster(clustername)
     local conf = require "conf"
     local cmd = string.format("cd %s/shell && sh start.sh %s", conf.workspace, clustername)
-    skynet.error(cmd)
     os.execute(cmd)
 end
 
 function util.gc()
-    local conf = require "conf"
-    if conf.debug then
+    if skynet.getenv "DEBUG" then
         collectgarbage("collect")
         return collectgarbage("count")
     end
@@ -96,7 +55,6 @@ function util.dump(root, ...)
         space = space .. "  "
         for k, v in pairs(t) do
             if filter[v] then
-
                 table.insert(tbl, space .. _to_key(k) .. " = " .. filter[v])
             elseif filter[v] or type(v) ~= "table" then
                 local val = tostring(v)
@@ -119,32 +77,6 @@ function util.dump(root, ...)
 
     return table.concat(tbl, "\n")
 end
-
-function util.printdump(root, ...)
-    skynet.error(util.dump(root, ...))
-end
-
-function util.serialize_table(root)
-    local cache = {  [root] = "." }
-    local function _dump(t,space,name)
-        local temp = {}
-        for k,v in pairs(t) do
-            local key = tostring(k)
-            if cache[v] then
-                table.insert(temp,"+" .. key .. " {" .. cache[v].."}")
-            elseif type(v) == "table" then
-                local new_key = name .. "." .. key
-                cache[v] = new_key
-                table.insert(temp,"+" .. key .. _dump(v,space .. "|" .. srep(" ",#key),new_key))
-            else
-                table.insert(temp,"+" .. key .. " [" .. tostring(v).."]")
-            end
-        end
-        return tconcat(temp,"\n"..space)
-    end
-    return (_dump(root, "",""))
-end
-
 
 function util.is_in_list(list, obj)
     for _, o in pairs(list) do
@@ -187,34 +119,6 @@ local function new_module(modname)
     local new_mod = require(modname)
     package.loaded[modname] = module
     return new_mod
-end
-
-local class_prop = {
-    classname = true,
-    class = true,
-    Get = true,
-    Set = true,
-    super = true,
-    __newindex = true,
-    __index = true,
-    new = true,
-}
-
-function util.reload_class(modname)
-    local old_class = require(modname)
-    local new_class = new_module(modname)
-
-    if old_class.classname and old_class.class then
-        for k, v in pairs(new_class.class) do
-            if not class_prop[k] then
-                old_class[k] = v
-            end
-        end
-    else
-        for k, v in pairs(new_class) do
-            old_class[k] = v
-        end
-    end
 end
 
 function util.reload_module(modname)
@@ -384,4 +288,14 @@ function util.printbuff(buff)
     end
     print(str)
 end
+
+-- 获取节点内的protobuf
+function util.get_protobuf(proto_service)
+    local protobuf_env = skynet.call(proto_service, "lua", "get_protobuf_env")
+    assert(type(protobuf_env) == "userdata")
+    assert(not package.loaded["protobuf"])
+    debug.getregistry().PROTOBUF_ENV = protobuf_env
+    return require "bw.protobuf"
+end
+
 return util

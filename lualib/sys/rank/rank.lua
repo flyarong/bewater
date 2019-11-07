@@ -1,10 +1,8 @@
 local class     = require "bw.class"
-local mongo     = require "bw.db.mongo_helper"
 local factory   = require "bw.orm.factory"
 local util      = require "bw.util"
 local log       = require "bw.log"
-
-local trace = log.trace("rank")
+local mongo     = require "db.mongo"
 
 local mt = {}
 function mt:ctor(cmp)
@@ -23,12 +21,14 @@ function mt:load(query)
 end
 
 function mt:save()
-    local new_obj = factory.extract_data(self.obj)
-    if util.cmp_table(new_obj, self.obj) then
-        trace("no change, rank:%s", self.obj.name)
+    local cur_obj = factory.extract_data(self.obj)
+    if self.last_obj and util.cmp_table(cur_obj, self.last_obj) then
+        log.debugf("no change, rank:%s", self.obj.name)
+        return
     end
-    mongo.update("rank", {name = self.name}, self.obj)
-    self.obj = new_obj
+    mongo.update("rank", {name = self.obj.name}, self.obj)
+    log.debug("save", self.obj.name)
+    self.last_obj = cur_obj
 end
 
 function mt:find(k)
@@ -48,7 +48,7 @@ function mt:update(k, v)
         end
     end
 
-    local old, i = self:find(k)
+    local old = self:find(k)
     if old then
         old.v = v
     else

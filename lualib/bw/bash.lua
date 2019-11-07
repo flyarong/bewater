@@ -1,7 +1,110 @@
-local skynet = require "skynet"
-package.path = "?.lua;" .. package.path
+local M = {}
 
-local _ENV = setmetatable({}, {__index = _ENV})
+local function lookup(level, key)
+    assert(key and #key > 0, key)
+
+    local value
+
+    for i = 1, 256 do
+        local k, v = debug.getlocal(level, i)
+        if k == key then
+            value = v
+        elseif not k then
+            break
+        end
+    end
+
+    if value then
+        return value
+    end
+
+    local info1 = debug.getinfo(level, 'Sn')
+    local info2 = debug.getinfo(level + 1, 'Sn')
+    if info1.source == info2.source or
+        info1.short_src == info2.short_src then
+        return lookup(level + 1, key)
+    end
+end
+
+function M.format(expr, indent)
+    expr = string.gsub(expr, '[\n\r]', '\n')
+    expr = string.gsub(expr, '^[\n]*', '') -- trim head '\n'
+    expr = string.gsub(expr, '[ \n]*$', '') -- trim tail '\n' or ' '
+
+    local space = string.match(expr, '^[ ]*')
+    indent = string.rep(' ', indent or 0)
+    expr = string.gsub(expr, '^[ ]*', '')  -- trim head space
+    expr = string.gsub(expr, '\n' .. space, '\n' .. indent)
+    expr = indent .. expr
+
+    local function eval(_expr)
+        return string.gsub(_expr, "([ ]*)(${[%w_.]+})", function (_indent, str)
+            local key = string.match(str, "[%w_]+")
+            local level = 1
+            local filePath
+            -- search caller file path
+            while true do
+                local info = debug.getinfo(level, 'S')
+                if info then
+                    if info.source == "=[C]" then
+                        level = level + 1
+                    else
+                        filePath = filePath or info.source
+                        if filePath ~= info.source then
+                            break
+                        else
+                            level = level + 1
+                        end
+                    end
+                else
+                    break
+                end
+            end
+            -- search in the functin local value
+            local value = lookup(level + 1, key) or _G[key]
+            for field in string.gmatch(string.match(str, "[%w_.]+"), '[^.]+') do
+                if not value then
+                    break
+                end
+                if field ~= key then
+                    value = value[field]
+                end
+            end
+            if value == nil then
+                error("value not found for '" .. str .. "'")
+            else
+                -- indent the value if value has multiline
+                if type(value) == 'table' and value.tostring then
+                    value = value:tostring()
+                end
+                value = string.gsub(value, '[\n]*$', '')
+                return _indent .. string.gsub(tostring(value), '\n', '\n' .. _indent)
+            end
+        end)
+    end
+
+    expr = eval(expr)
+    while true do
+        local s, n = string.gsub(expr, '\n[ ]+\n', '\n\n')
+        expr = s
+        if n == 0 then
+            break
+        end
+    end
+
+    while true do
+        local s, n = string.gsub(expr, '\n\n\n', '\n\n')
+        expr = s
+        if n == 0 then
+            break
+        end
+    end
+
+    expr = string.gsub(expr, '{\n\n', '{\n')
+    expr = string.gsub(expr, '\n\n}', '\n}')
+
+    return expr
+end
 
 local function io_popen(cmd, mode)
     local file = io.popen(cmd)
@@ -10,46 +113,23 @@ local function io_popen(cmd, mode)
     return ret
 end
 
-function add_lua_search_path(path)
-    if not string.find(package.path, path, 1, true) then
-        print("add search path: " .. path)
-        package.path = path .. "/?.lua;" .. package.path
+function M.execute(cmd)
+    return io_popen(M.format(cmd))
+end
+
+function M.list(dir, pattern)
+    local f = io.popen(string.format('cd %s && find -L . -name "%s"', dir, pattern or "*.*"))
+    local arr = {}
+    for path in string.gmatch(f:read("*a"), '[^\n\r]+') do
+        path = string.gsub(path, '%./', '')
+        if string.find(path, '[^./\\]+%.[^.]+$') then
+            arr[#arr + 1] = path
+        end
     end
+    return arr
 end
 
-function command(cmd, ...)
-    local data = io_popen(string.format(cmd, ...))
-    return string.match(data, "(.*)[\n\r]+$") or data
-end
-
-function cat(path)
-    local file = io.open(path)
-    assert(file, "file not found: " .. path)
-    local data = file:read("*a")
-    file:close()
-    return data
-end
-
-function exist(path)
-    local file = io.open(path)
-    if file then
-        file:close()
-    end
-    return file ~= nil
-end
-
-function wcat(path)
-    return io_popen("lynx -source " .. path)
-end
-
-function echo(path, content)
-    local file = io.open(path, "w")
-    file:write(content)
-    file:flush()
-    file:close()
-end
-
-function file_exists(path)
+function M.file_exists(path)
     local file = io.open(path, "rb")
     if file then
         file:close()
@@ -57,56 +137,4 @@ function file_exists(path)
     return file ~= nil
 end
 
-local function lookup_local(level, key)
-    assert(key and #key > 0, key)
-    for i = 1, 256 do
-        local k, v = debug.getlocal(level, i)
-        if k == key then
-            return v
-        elseif not k then
-            break
-        end
-    end
-
-    local info1 = debug.getinfo(level, 'S')
-    local info2 = debug.getinfo(level + 1, 'S')
-    if info1.source == info2.source or
-        info1.short_src == info2.short_src then
-        return lookup_local(level + 1, key)
-    end
-end
-
-function bash(expr, ...)
-    if select('#', ...) > 0 then
-        expr = string.format(expr, ...)
-    end
-    local function eval(expr)
-        return string.gsub(expr, "(${?[%w_]+}?)", function (str)
-            local key = string.match(str, "[%w_]+")
-            local value = lookup_local(6, key) or _G[key]
-            if value == nil then
-                error("value not found for " .. key)
-            else
-                return tostring(value)
-            end
-        end)
-    end
-    local cmd = eval(expr)
-    --skynet.error(cmd)
-    local ret = io_popen(cmd)
-    if ret ~= "" then
-        ret = string.match(ret, "(.+)\n$") -- 去掉最后一个换行符
-        --skynet.error(ret)
-    end
-    return ret
-end
-
-function remote_bash(user, host, expr, ...)
-    local cmd = string.format(expr, ...)
-    if host == "localhost" or host == "127.0.0.1" then
-        return bash(cmd)
-    end
-    return bash('ssh %s@%s "%s"', user, host, cmd)
-end
-
-return _ENV
+return M

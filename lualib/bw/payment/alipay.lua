@@ -1,4 +1,4 @@
-local conf  = require "conf"
+-- 支付宝支付
 local codec = require "codec"
 local sign  = require "bw.auth.sign"
 
@@ -9,6 +9,7 @@ function M.create_order(param)
     local item_desc     = assert(param.item_desc)
     local pay_price     = assert(param.pay_price)
     local partner       = assert(param.partner)
+    local url           = assert(param.url)
     assert(param.uid)
     assert(param.item_sn)
     assert(param.pay_channel)
@@ -17,11 +18,11 @@ function M.create_order(param)
     local args = {
         partner = partner,
         seller_id = partner,
-        out_trade_no = order_no..'-'..os.time(),
+        out_trade_no = order_no,
         subject = item_desc,
         body = item_desc,
         total_fee = pay_price,
-        notify_url = string.format("%s/api/payment/alipay_notify", conf.pay.host),
+        notify_url = url,
         service = "mobile.securitypay.pay",
         payment_type = '1',
         anti_phishing_key = '',

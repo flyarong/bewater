@@ -1,41 +1,56 @@
---  微信验证
---  每个需要用到的服务都需要在启动的时候调wx.init
+--  微信验证(access_token和ticket需要在服务中缓存!)
 --
-
-local http      = require "bw.web.http_helper"
-local sha256    = require "bw.auth.sha256"
+local skynet    = require "skynet"
 local json      = require "cjson.safe"
+local bewater   = require "bw.bewater"
+local sha256    = require "bw.auth.sha256"
+local http      = require "bw.http"
 
-local map = {} -- appid -> access
+local function url_encoding(tbl, encode)
+    local data = {}
+    for k, v in pairs(tbl) do
+        table.insert(data, string.format("%s=%s", k, v))
+    end
 
-local function request_access_token(appid, secret)
+    local url = table.concat(data, "&")
+    if encode then
+        return string.gsub(url, "([^A-Za-z0-9])", function(c)
+            return string.format("%%%02X", string.byte(c))
+        end)
+    else
+        return url
+    end
+end
+
+local M = {}
+
+function M.request_access_token(appid, secret)
     assert(appid and secret)
     local ret, resp = http.get("https://api.weixin.qq.com/cgi-bin/token", {
         grant_type  = "client_credential",
         appid       = appid,
         secret      = secret,
     })
-    if ret then
-        resp = json.decode(resp)
-        local access = {}
-        access.token       = resp.access_token
-        access.exires_in   = resp.expires_in
-        access.time        = os.time()
-        map[appid] = access
+    resp = json.decode(resp)
+    if resp then
+        return resp.access_token, resp.expires_in
     else
-        error(resp)
+        error(string.format("request_access_token error, appid:%s, secret:%s", appid, secret))
     end
 end
 
-local M = {}
-function M.get_access_token(appid, secret)
-    assert(appid and secret)
-    local access = map[appid]
-    if not access or  os.time() - access.time > access.exires_in then
-        request_access_token(appid, secret)
-        return map[appid]
+function M.request_ticket(appid, token)
+    assert(appid)
+    local ret, resp = http.get("https://api.weixin.qq.com/cgi-bin/ticket/getticket", {
+        access_token = token,
+        type = 2,
+    })
+    resp = json.decode(resp)
+    if resp then
+        return resp.ticket, resp.expires_in
+    else
+        error(string.format("request_ticket error, appid:%s, token:%s", appid, token))
     end
-    return access.token
 end
 
 function M.check_code(appid, secret, js_code)
@@ -46,50 +61,53 @@ function M.check_code(appid, secret, js_code)
         appid = appid,
         secret = secret,
     })
-    if ret then
+    if resp then
         return json.decode(resp)
     else
-        error(resp)
+        error(string.format("check_code error, appid:%s, secret:%s, js_code:%s",
+        appid, secret, js_code))
     end
 end
 
 -- data {score = 100, gold = 300}
-function M:set_user_storage(appid, secret, openid, session_key, data)
+function M.set_user_storage(appid, access_token, openid, session_key, data)
     local kv_list = {}
     for k, v in pairs(data) do
         table.insert(kv_list, {key = k, value = v})
     end
     local post = json.encode({kv_list = kv_list})
-    local url = "https://api.weixin.qq.com/wxa/set_user_storage?"..http.url_encoding({
-        access_token = M.get_access_token(appid, secret),
+    local url = "https://api.weixin.qq.com/wxa/set_user_storage?"..url_encoding({
+        access_token = access_token,
         openid = openid,
         appid = appid,
         signature = sha256.hmac_sha256(post, session_key),
         sig_method = "hmac_sha256",
     })
     local ret, resp = http.post(url, post)
-    if ret then
+    if resp then
         return json.decode(resp)
     else
-        error(resp)
+        error(string.format("set_user_storage error, appid:%s, access_token:%s, openid:%s, session_key:%s, data:%s",
+        appid, access_token, openid, session_key, data))
     end
 end
 
 -- key_list {"score", "gold"}
-function M:remove_user_storage(appid, secret, openid, session_key, key_list)
+function M.remove_user_storage(appid, access_token, openid, session_key, key_list)
     local post = json.encode({key = key_list})
-    local url = "https://api.weixin.qq.com/wxa/remove_user_storage?"..http.url_encoding({
-        access_token = M.get_access_token(appid, secret),
+    local url = "https://api.weixin.qq.com/wxa/remove_user_storage?"..url_encoding({
+        access_token = access_token,
         openid = openid,
         appid = appid,
         signature = sha256.hmac_sha256(post, session_key),
         sig_method = "hmac_sha256",
     })
     local ret, resp = http.post(url, post)
-    if ret then
+    if resp then
         return json.decode(resp)
     else
-        error(resp)
+        error(string.format("remove_user_storage error, appid:%s, access_token:%s, openid:%s, session_key:%s",
+        appid, access_token, openid, session_key))
     end
 end
 

@@ -1,0 +1,15 @@
+[submodule "3rd/lua-cjson"]
+	path = 3rd/lua-cjson
+	url = git@github.com:cloudwu/lua-cjson.git
+[submodule "skynet"]
+	path = skynet
+	url = git@github.com:zhandouxiaojiji/skynet.git
+    ignore = dirty
+[submodule "3rd/pbc"]
+	path = 3rd/pbc
+	url = git@github.com:zhandouxiaojiji/pbc.git
+    ignore = dirty
+[submodule "3rd/lfs"]
+	path = 3rd/lfs
+	url = git@github.com:keplerproject/luafilesystem.git
+    ignore = dirty

@@ -1,4 +1,5 @@
 local skynet = require "skynet.manager"
+local log    = require "bw.log"
 
 local M = {}
 M.NORET = "NORET"
@@ -10,20 +11,18 @@ end
 
 local function __TRACEBACK__(errmsg)
     local track_text = debug.traceback(tostring(errmsg), 2)
-    skynet.error("---------------------------------------- TRACKBACK ----------------------------------------")
-    skynet.error(track_text, "LUA ERROR")
-    skynet.error("---------------------------------------- TRACKBACK ----------------------------------------")
+    log.error("---------------------------------------- TRACKBACK ----------------------------------------")
+    log.error(track_text)
+    if skynet.getenv "ALERT_ENABLE" == "true" then
+        skynet.send(".alert", "lua", "traceback", track_text)
+    end
+    log.error("---------------------------------------- TRACKBACK ----------------------------------------")
     return false
 end
 
 -- 尝试调一个function, 如果被调用的函数有异常,返回false，
 function M.try(func, ...)
     return xpcall(func, __TRACEBACK__, ...)
-end
-
-function M.reg_code(env)
-    local code = require "bw.proto.code"
-    code.REG(env)
 end
 
 -- 给一个服务注入一段代码
@@ -52,7 +51,7 @@ function M.timeout_call(ti, ...)
 
     if co then
         co = nil
-        skynet.error("call timeout:", ...)
+        log.warning("call timeout:", ...)
         return false
     else
         if ret[1] then
@@ -120,6 +119,34 @@ function M.protect(tbl, depth)
         end
     end
     return tbl
+end
+
+function M.proxy(addr, is_send)
+    assert(addr)
+    return setmetatable({}, {
+        __index = function(_, k)
+            return function(...)
+                if is_send then
+                    skynet.send(addr, "lua", k, ...)
+                else
+                    return skynet.call(addr, "lua", k, ...)
+                end
+            end
+        end,
+    })
+end
+
+function M.start(handler, start_func)
+    assert(handler)
+    skynet.start(function()
+        skynet.dispatch("lua", function(_,_, cmd, ...)
+            local f = assert(handler[cmd], cmd)
+            M.ret(f(...))
+        end)
+        if start_func then
+            start_func()
+        end
+    end)
 end
 
 return M
